@@ -57,7 +57,8 @@ const Genetator = () => {
                 headers: { Authorization: `Bearer ${token}` }
             })
 
-            toast.success(data.message)
+            toast.success('Image generated successfully!')
+            setIsGenerating(false)
             navigate('/result/' + data.projectId)
 
         } catch (error: any) {

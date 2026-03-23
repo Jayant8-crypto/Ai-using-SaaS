@@ -1,7 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_GENAI_API_KEY,
-})
+let _ai: GoogleGenAI | null = null;
 
-export default ai;
+const ai = new Proxy({} as GoogleGenAI, {
+  get(_target, prop) {
+    if (!_ai) {
+      _ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_GENAI_API_KEY });
+    }
+    return (_ai as any)[prop];
+  }
+});
+
+export default ai;

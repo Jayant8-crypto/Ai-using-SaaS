@@ -23,7 +23,7 @@ const Result = () => {
     const fetchProjectData = async ()=>{
         try {
             const token = await getToken();
-            const {data} = await api.get(`/api/user/projects/${projectId}`, {
+            const {data} = await api.get(`/api/user/projects/${projectId}?t=${Date.now()}`, {
                 headers: { Authorization: `Bearer ${token}` }
             })
             setProjectData(data.project)
@@ -43,36 +43,43 @@ const Result = () => {
                 headers: { Authorization: `Bearer ${token}` }
             })
 
-            setProjectData(prev => ({...prev, generatedVideo: data.videoUrl, 
-            isGenerating: false}))
-
-            toast.success(data.message)
-            setIsGenerating(false)
+            // Both fresh generation and "already generated" return videoUrl
+            if (data.videoUrl) {
+                setProjectData(prev => ({...prev, generatedVideo: data.videoUrl, isGenerating: false}))
+                toast.success('Video ready!')
+                setIsGenerating(false)
+            } else {
+                // Video is being generated in background — poll for it
+                toast.success('Video is being generated, please wait...')
+            }
                 
         } catch (error: any) {
             toast.error(error?.response?.data?.message || error.message);
             console.error(error);
+            setIsGenerating(false);
         } 
     }
     
     useEffect(()=>{
-        if(user && !projectId) {
+        if(user && projectId) {
         fetchProjectData()
         }else if(isLoaded && !user){
             navigate('/')
         }
     },[user])
      
-    // Fetch project evry 10 sec
+    // Fetch project every 10 sec while generating — stop when video is ready
     useEffect(()=>{
-        if(user && isGenerating){
-            const interval = setInterval(()=>{
-                fetchProjectData()
+        if(user && isGenerating && !project.generatedVideo){
+            const interval = setInterval(async ()=>{
+                await fetchProjectData()
+                // fetchProjectData will call setProjectData which updates project,
+                // and the next render will stop the interval if generatedVideo appears
             }, 10000);
 
             return () => clearInterval(interval)
         }
-        },[user, isGenerating]) 
+    },[user, isGenerating, project.generatedVideo]) 
 
     return loading ? (
         <div className="h-screen w-full flex items-center justify-center">
