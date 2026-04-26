@@ -2,17 +2,30 @@ import { Request, Response } from 'express';
 import * as Sentry from "@sentry/node";
 import { prisma } from '../configs/prisma';
 import { v2 as cloudinary } from 'cloudinary';
-import { GenerateContentConfig, HarmBlockThreshold, HarmCategory } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
-import ai from '../configs/ai';
 import axios from 'axios';
+import Replicate from 'replicate';
+import { GenerateContentConfig, HarmBlockThreshold, HarmCategory } from '@google/genai';
+import ai from '../configs/ai';
 
-const loadImage = async (path: string, mimeType: string) => {
+const loadImage = async (filePath: string, mimetype: string) => {
+    // Determine mimeType manually if empty or unknown
+    let resolvedMimeType = mimetype;
+    if (!resolvedMimeType || resolvedMimeType === '') {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.jpeg' || ext === '.jpg') resolvedMimeType = 'image/jpeg';
+        else if (ext === '.png') resolvedMimeType = 'image/png';
+        else if (ext === '.webp') resolvedMimeType = 'image/webp';
+        else if (ext === '.heic') resolvedMimeType = 'image/heic';
+        else if (ext === '.heif') resolvedMimeType = 'image/heif';
+        else resolvedMimeType = 'image/jpeg'; // fallback
+    }
+
     return {
         inlineData: {
-            data: fs.readFileSync(path).toString('base64'),
-            mimeType
+            data: fs.readFileSync(filePath).toString('base64'),
+            mimeType: resolvedMimeType
         }
     }
 }
@@ -61,6 +74,72 @@ export const createProject = async (req: Request, res: Response) => {
         )
         console.log('[createProject] Images uploaded:', uploadedImages.length);
 
+        // Load images as base64 for Gemini
+        const img1base64 = await loadImage(images[0].path, images[0].mimetype);
+        const img2base64 = await loadImage(images[1].path, images[1].mimetype);
+
+        // Step 1: Use Gemini 2.5 Flash to analyze images and create prompt
+        console.time('gemini-analysis');
+        const descriptionResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [
+                img1base64,
+                img2base64,
+                {
+                    text: `You are a professional ecommerce photographer AI.
+                    Image 1 is a person/model. Image 2 is a product called "${productName}"${productDescription ? ` (${productDescription})` : ''}.
+                    Write a detailed, photorealistic image generation prompt (max 150 words) that shows the person naturally holding or using the product.
+                    Include: exact pose, skin tone, clothing, lighting style, background, product placement, shadows, and professional studio quality.
+                    ${userPrompt ? `Additional instructions: ${userPrompt}` : ''}
+                    Return ONLY the image generation prompt, nothing else.`
+                }
+            ]
+        });
+        console.timeEnd('gemini-analysis');
+
+        const compositingPrompt = descriptionResponse.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!compositingPrompt) throw new Error('Failed to generate compositing prompt');
+
+        // Step 2: Use Gemini 2.5 Flash image model
+        const model = 'gemini-2.5-flash-image';
+        const generationConfig: GenerateContentConfig = {
+            maxOutputTokens: 32768,
+            temperature: 1,
+            topP: 0.95,
+            responseModalities: ['IMAGE'],
+            imageConfig: {
+                aspectRatio: aspectRatio || '9:16',
+                imageSize: '1K',
+            },
+            safetySettings: [
+                {
+                    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold: HarmBlockThreshold.OFF,
+                },
+                {
+                    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    threshold: HarmBlockThreshold.OFF,
+                },
+                {
+                    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    threshold: HarmBlockThreshold.OFF,
+                },
+                {
+                    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold: HarmBlockThreshold.OFF,
+                },
+            ],
+        };
+
+        console.time('gemini-gen');
+        const response: any = await ai.models.generateContent({
+            model,
+            contents: [img1base64, img2base64, { text: compositingPrompt }],
+            config: generationConfig,
+        });
+        console.timeEnd('gemini-gen');
+
+        // Create project in database
         const project = await prisma.project.create({
             data: {
                 name,
@@ -73,85 +152,35 @@ export const createProject = async (req: Request, res: Response) => {
                 uploadedImages,
                 isGenerating: true
             }
-        })
+        });
 
         tempProjectId = project.id;
         console.log('[createProject] Project created:', project.id);
 
-        const model = 'gemini-3-pro-image-preview';
-
-        const generationConfig: GenerateContentConfig = {
-            temperature: 1,
-            topP: 0.95,
-            responseModalities: ['Text', 'Image'],
-            safetySettings: [
-                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.OFF },
-                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.OFF },
-                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.OFF },
-                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.OFF },
-            ],
-        }    
-  
-        // image to base64 structure for ai model
-        console.log('[createProject] Loading images as base64...');
-        const img1base64 = await loadImage(images[0].path, images[0].mimetype);
-        const img2base64 = await loadImage(images[1].path, images[1].mimetype);
-
-        const promptText = `Combine the person and product into a realistic photo.
-        Make the person naturally hold or use the product.
-        Match lighting, shadows, scale and perspective.
-        Make the person stand in professional studio lighting.
-        Output ecommerce-quality photo realistic imagery.
-        ${userPrompt || ''}`
-
-        console.log('[createProject] Calling Gemini API with model:', model);
-
-        // Generate the image using the ai model (120s timeout)
-        const TIMEOUT_MS = 120_000;
-        const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Image generation timed out after 120 seconds')), TIMEOUT_MS)
-        );
-        const response: any = await Promise.race([
-            ai.models.generateContent({
-                model,
-                contents: [{
-                    role: 'user',
-                    parts: [img1base64, img2base64, { text: promptText }]
-                }],
-                config: generationConfig,
-            }),
-            timeoutPromise
-        ])
-
-        console.log('[createProject] Gemini response received');
-
-        // Check if the response is valid
+        // Process the generated image
         if(!response?.candidates?.[0]?.content?.parts){
-            console.log('[createProject] Unexpected response:', JSON.stringify(response).slice(0, 500));
-            throw new Error('Unexpected response from AI model')
-        } 
+            throw new Error('Unexpected response from Gemini')
+        }
 
         const parts = response.candidates[0].content.parts;
-        console.log('[createProject] Response parts count:', parts.length);
-
-        let finalBuffer: Buffer | null = null
+        let base64Data: string | null = null;
 
         for(const part of parts){
             if(part.inlineData){
-                finalBuffer = Buffer.from(part.inlineData.data, 'base64')
+                base64Data = part.inlineData.data;
             }
         }
 
-        if(!finalBuffer){
-            throw new Error('Failed to generate image - no image data in response');
+        if(!base64Data){
+            throw new Error('Failed to generate image');
         }
 
-        console.log('[createProject] Uploading generated image to Cloudinary...');
-        const base64Image = `data:image/png;base64,${finalBuffer.toString('base64')}`
+        const base64Image = `data:image/png;base64,${base64Data}`;
 
+        // Upload generated image to Cloudinary
         const uploadResult = await cloudinary.uploader.upload(base64Image, {resource_type: 'image'});
-        console.log('[createProject] Generated image uploaded:', uploadResult.secure_url);
 
+        // Update project with generated image
         await prisma.project.update({
             where: {id: project.id},
             data: {
