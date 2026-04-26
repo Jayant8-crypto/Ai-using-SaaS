@@ -2,7 +2,7 @@ import type React from "react"
 import type { Project } from "../types"
 import { useState, type SetStateAction } from "react"
 import { useNavigate } from "react-router-dom"
-import { EllipsisIcon, Gem, ImageIcon, Loader2Icon, PlaySquareIcon, Share2Icon, Trash2Icon } from "lucide-react"
+import { EllipsisIcon, ImageIcon, Loader2Icon, PlaySquareIcon, Share2Icon, Trash2Icon } from "lucide-react"
 import { GhostButton, PrimaryButton } from "./Buttons"
 
 
