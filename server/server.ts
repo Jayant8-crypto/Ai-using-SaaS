@@ -1,4 +1,4 @@
-import './configs/instrument.mjs';
+import './configs/instrument.js';
 import 'dotenv/config'
 import express, { Request, Response } from 'express';
 import cors from 'cors'
