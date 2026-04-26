@@ -1,13 +1,13 @@
 import { Request, Response } from 'express';
 import * as Sentry from "@sentry/node";
-import { prisma } from '../configs/prisma';
+import { prisma } from '../configs/prisma.js';
 import { v2 as cloudinary } from 'cloudinary';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import Replicate from 'replicate';
 import { GenerateContentConfig, HarmBlockThreshold, HarmCategory } from '@google/genai';
-import ai from '../configs/ai';
+import ai from '../configs/ai.js';
 
 const loadImage = async (filePath: string, mimetype: string) => {
     // Determine mimeType manually if empty or unknown

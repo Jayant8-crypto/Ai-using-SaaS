@@ -3,10 +3,10 @@ import 'dotenv/config'
 import express, { Request, Response } from 'express';
 import cors from 'cors'
 import { clerkMiddleware } from '@clerk/express'
-import clerkWebhooks from './controllers/clerk';
+import clerkWebhooks from './controllers/clerk.js';
 import * as Sentry from "@sentry/node";
-import userRouter from './routes/userRoutes';
-import projectRouter from './routes/projectRoutes';
+import userRouter from './routes/userRoutes.js';
+import projectRouter from './routes/projectRoutes.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
